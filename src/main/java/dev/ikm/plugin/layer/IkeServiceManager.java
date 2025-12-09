@@ -43,7 +43,7 @@ public class IkeServiceManager {
 
     public static final String PATH_KEY = "dev.ikm.tinkar.plugin.service.boot.IkmServiceManager.PATH_KEY";
     public static final String ARTIFACT_KEY = "dev.ikm.tinkar.plugin.service.boot.IkmServiceManager.ARTIFACT_KEY";
-    private static final String DefaultPluggableServiceLoaderArtifactId = "plugin-service-loader";
+    private static final String PLUGIN_SERVICE_LOADER_DIRECTORY = "plugin-service-loader";
 
     private final Layers layers;
 
@@ -85,7 +85,7 @@ public class IkeServiceManager {
 
     public static void deployPluginServiceLoader(List<ModuleLayer> parentLayers) {
         if (System.getProperty(PATH_KEY) == null) {
-            String artifactKey = System.getProperty(ARTIFACT_KEY, DefaultPluggableServiceLoaderArtifactId);
+            String artifactKey = System.getProperty(ARTIFACT_KEY, PLUGIN_SERVICE_LOADER_DIRECTORY);
 
             Path pluginServiceLoaderPath = resolvePluginServiceLoaderPath();
 
@@ -118,17 +118,39 @@ public class IkeServiceManager {
      * @return Path to the plugin service loader directory
      */
     private static Path resolvePluginServiceLoaderPath() {
-        // Initialize the pluginServiceLoaderPath to the installed application plugin service loader directory
-        Path pluginServiceLoaderPath = Path.of("/").resolve("Applications").resolve("Orchestrator.app")
-                .resolve("Contents").resolve(DefaultPluggableServiceLoaderArtifactId);
-
-        // For local maven builds, use the latest plugin service loader expected to exist at the localPluginServiceLoaderPath.
-        Path localPluginServiceLoaderPath = Path.of(System.getProperty("user.dir")).resolve("target").resolve(DefaultPluggableServiceLoaderArtifactId);
-        if (localPluginServiceLoaderPath.toFile().exists()) {
-            pluginServiceLoaderPath = localPluginServiceLoaderPath;
+        // First, try to find it relative to the application directory (for jlink images)
+        // When running from jlink image, user.dir is typically <image>/bin
+        Path userDir = Path.of(System.getProperty("user.dir"));
+        
+        // Check if we're running from a jlink image's bin directory
+        Path jlinkImagePath = userDir.getParent().resolve(PLUGIN_SERVICE_LOADER_DIRECTORY);
+        if (jlinkImagePath.toFile().exists()) {
+            LOG.info("Plugin Service Loader directory: {}", jlinkImagePath.toAbsolutePath());
+            return jlinkImagePath;
         }
-        LOG.info("Plugin Service Loader directory: {}", pluginServiceLoaderPath.toAbsolutePath());
-        return pluginServiceLoaderPath;
+        
+        // For local maven builds, use the latest plugin service loader expected to exist at the localPluginServiceLoaderPath.
+        Path localPluginServiceLoaderPath = userDir.resolve("target").resolve(PLUGIN_SERVICE_LOADER_DIRECTORY);
+        if (localPluginServiceLoaderPath.toFile().exists()) {
+            LOG.info("Plugin Service Loader directory: {}", localPluginServiceLoaderPath.toAbsolutePath());
+            return localPluginServiceLoaderPath;
+        }
+        
+        // For installed applications on macOS
+        Path installedMacPath = Path.of("/").resolve("Applications").resolve("Orchestrator.app")
+                .resolve("Contents").resolve(PLUGIN_SERVICE_LOADER_DIRECTORY);
+        if (installedMacPath.toFile().exists()) {
+            LOG.info("Plugin Service Loader directory: {}", installedMacPath.toAbsolutePath());
+            return installedMacPath;
+        }
+        
+        // If nothing found, log the paths we tried and return the jlink image path as default
+        LOG.warn("Plugin service loader not found at any expected location. Tried:");
+        LOG.warn("  - Jlink image: {}", jlinkImagePath.toAbsolutePath());
+        LOG.warn("  - Local build: {}", localPluginServiceLoaderPath.toAbsolutePath());
+        LOG.warn("  - Installed app: {}", installedMacPath.toAbsolutePath());
+        LOG.info("Plugin Service Loader directory: {}", jlinkImagePath.toAbsolutePath());
+        return jlinkImagePath;
     }
 
     /**

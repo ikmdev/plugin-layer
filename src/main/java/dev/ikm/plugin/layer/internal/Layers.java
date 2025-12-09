@@ -101,13 +101,36 @@ public class Layers {
      * @throws IOException if an I/O error occurs while handling the pluginWatchDirectory component
      */
     private void handlePluginComponent(PluginWatchDirectory pluginWatchDirectory) throws IOException {
+        LOG.info("Processing plugin directory: {}", pluginWatchDirectory.directory().toAbsolutePath());
+        
         // alternative, create a new layer out of all plugins...
         Layers.this.moduleLayers.clear();
         Layers.this.moduleLayers.add(bootLayer);
         List<Path> pluginPathEntries = getPluginPathEntries(pluginWatchDirectory);
+        
+        LOG.info("Found {} plugin JAR files in directory", pluginPathEntries.size());
+        for (Path pluginPath : pluginPathEntries) {
+            LOG.info("  - Plugin JAR: {}", pluginPath.toAbsolutePath());
+        }
+        
+        if (pluginPathEntries.isEmpty()) {
+            LOG.warn("No plugin JARs found in: {}", pluginWatchDirectory.directory().toAbsolutePath());
+            return;
+        }
+        
         ModuleLayer pluginModuleLayer = createModuleLayer(PLUGIN_PARENT_LAYER_AS_LIST, pluginPathEntries);
         PluginNameAndModuleLayer pluginNameAndModuleLayer = new PluginNameAndModuleLayer(pluginWatchDirectory.name(), pluginModuleLayer);
         moduleLayers.add(pluginNameAndModuleLayer);
+        
+        // Log the modules in the new layer
+        LOG.info("Created plugin module layer '{}' with {} modules:", 
+                pluginWatchDirectory.name(), pluginModuleLayer.modules().size());
+        for (Module module : pluginModuleLayer.modules()) {
+            LOG.info("  - Module: {} (descriptor: {})", 
+                    module.getName(), 
+                    module.getDescriptor() != null ? module.getDescriptor().toNameAndVersion() : "none");
+        }
+        
         // Create new service loader with new layer...
         IkeServiceManager.deployPluginServiceLoader(moduleLayers.stream().map(pluginNameAndModuleLayerFromStream -> pluginNameAndModuleLayerFromStream.moduleLayer()).toList());
     }
@@ -115,10 +138,18 @@ public class Layers {
     private static List<Path> getPluginPathEntries(PluginWatchDirectory pluginWatchDirectory) {
         return getPluginPathEntries(pluginWatchDirectory.directory().toFile(), new ArrayList<>());
     }
+    
     private static List<Path> getPluginPathEntries(File directory, List<Path> pluginPathEntries) {
-        for (File jarFile: directory.listFiles()){
+        File[] files = directory.listFiles();
+        if (files == null) {
+            LOG.warn("Cannot list files in directory: {}", directory);
+            return pluginPathEntries;
+        }
+        
+        for (File jarFile : files) {
             if (jarFile.getName().endsWith(".jar")) {
                 pluginPathEntries.add(jarFile.toPath());
+                LOG.debug("Found plugin JAR: {}", jarFile.getName());
             } else if (jarFile.isDirectory()) {
                 getPluginPathEntries(jarFile, pluginPathEntries);
             }
@@ -155,6 +186,11 @@ public class Layers {
      * @return the created module layer
      */
     public static ModuleLayer createModuleLayer(List<ModuleLayer> parentLayers, List<Path> modulePathEntries) {
+        LOG.info("Creating module layer from {} path entries", modulePathEntries.size());
+        for (Path entry : modulePathEntries) {
+            LOG.info("  Module path entry: {}", entry);
+        }
+
         ClassLoader scl = ClassLoader.getSystemClassLoader();
 
         ModuleFinder finder = ModuleFinder.of(modulePathEntries.toArray(Path[]::new));
@@ -164,15 +200,49 @@ public class Layers {
                 .map(m -> m.descriptor().name())
                 .collect(Collectors.toSet());
 
-        Configuration appConfig = Configuration.resolve(
-                finder,
-                parentLayers.stream().map(ModuleLayer::configuration).collect(Collectors.toList()),
-                ModuleFinder.of(),
-                roots);
+        LOG.info("ModuleFinder discovered {} modules:", roots.size());
+        for (String moduleName : roots) {
+            LOG.info("  - Module: {}", moduleName);
+        }
 
-        return ModuleLayer.defineModulesWithOneLoader(appConfig, parentLayers, scl).layer();
+        if (roots.isEmpty()) {
+            LOG.error("No modules found in the provided paths! Check if JARs have valid module-info.class");
+            return null;
+        }
+
+        try {
+            Configuration appConfig = Configuration.resolve(
+                    finder,
+                    parentLayers.stream().map(ModuleLayer::configuration).collect(Collectors.toList()),
+                    ModuleFinder.of(),
+                    roots);
+
+            LOG.info("Module configuration resolved with {} modules", appConfig.modules().size());
+            for (var resolvedModule : appConfig.modules()) {
+                LOG.info("  - Resolved module: {}", resolvedModule.name());
+                resolvedModule.reference().descriptor().provides().forEach(provides -> {
+                    LOG.info("    Provides service: {} with implementations: {}",
+                            provides.service(),
+                            String.join(", ", provides.providers()));
+                });
+            }
+
+            ModuleLayer layer = ModuleLayer.defineModulesWithOneLoader(appConfig, parentLayers, scl).layer();
+            LOG.info("Created module layer with {} modules", layer.modules().size());
+
+            return layer;
+        } catch (Exception e) {
+            LOG.error("Failed to create module layer", e);
+            LOG.error("Available modules in parent layers:");
+            for (ModuleLayer parentLayer : parentLayers) {
+                LOG.error("  Parent layer has {} modules:", parentLayer.modules().size());
+                for (Module m : parentLayer.modules()) {
+                    LOG.error("    - {}", m.getName());
+                }
+            }
+            throw new RuntimeException("Failed to create module layer for plugins", e);
+        }
     }
-
     /**
      * Unpacks a plugin artifact to the target directory.
      *
