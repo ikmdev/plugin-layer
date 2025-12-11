@@ -23,6 +23,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
@@ -118,39 +119,82 @@ public class IkeServiceManager {
      * @return Path to the plugin service loader directory
      */
     private static Path resolvePluginServiceLoaderPath() {
-        // First, try to find it relative to the application directory (for jlink images)
-        // When running from jlink image, user.dir is typically <image>/bin
-        Path userDir = Path.of(System.getProperty("user.dir"));
+        LOG.debug("Resolving plugin service loader path");
+        LOG.debug("  user.dir: {}", System.getProperty("user.dir"));
+        LOG.debug("  jpackage.app-path: {}", System.getProperty("jpackage.app-path"));
         
-        // Check if we're running from a jlink image's bin directory
-        Path jlinkImagePath = userDir.getParent().resolve(PLUGIN_SERVICE_LOADER_DIRECTORY);
-        if (jlinkImagePath.toFile().exists()) {
-            LOG.info("Plugin Service Loader directory: {}", jlinkImagePath.toAbsolutePath());
-            return jlinkImagePath;
+        // First, check if we're running from a jpackage-installed application
+        String jpackageAppPath = System.getProperty("jpackage.app-path");
+        if (jpackageAppPath != null) {
+            LOG.info("Detected jpackage.app-path for plugin service loader: {}", jpackageAppPath);
+            Path appPath = Path.of(jpackageAppPath);
+            
+            // jpackage.app-path points to: .../Contents/MacOS/<executable-name>
+            // We need to go up to Contents directory, then navigate to runtime/Contents/Home/plugin-service-loader
+            Path macosDir = appPath.getParent();  // Go to MacOS directory
+            if (macosDir != null) {
+                Path contentsDir = macosDir.getParent();  // Go to Contents directory
+                if (contentsDir != null) {
+                    Path pluginServiceLoaderPath = contentsDir.resolve("runtime")
+                            .resolve("Contents")
+                            .resolve("Home")
+                            .resolve(PLUGIN_SERVICE_LOADER_DIRECTORY);
+                    
+                    LOG.info("Checking jpackage plugin service loader path: {}", pluginServiceLoaderPath.toAbsolutePath());
+                    LOG.info("  Path exists: {}", Files.exists(pluginServiceLoaderPath));
+                    
+                    if (pluginServiceLoaderPath.toFile().exists()) {
+                        LOG.info("Plugin Service Loader directory: {}", pluginServiceLoaderPath.toAbsolutePath());
+                        return pluginServiceLoaderPath;
+                    }
+                }
+            }
         }
         
+        // For jlink images or local builds
+        Path userDir = Path.of(System.getProperty("user.dir"));
+        Path parent = userDir.getParent();
+        
+        // Check if we're running from a jlink image's bin directory
+        if (parent != null) {
+            Path jlinkImagePath = parent.resolve(PLUGIN_SERVICE_LOADER_DIRECTORY);
+            if (jlinkImagePath.toFile().exists()) {
+                LOG.info("Plugin Service Loader directory: {}", jlinkImagePath.toAbsolutePath());
+                return jlinkImagePath;
+            }
+        }
+    
         // For local maven builds, use the latest plugin service loader expected to exist at the localPluginServiceLoaderPath.
         Path localPluginServiceLoaderPath = userDir.resolve("target").resolve(PLUGIN_SERVICE_LOADER_DIRECTORY);
         if (localPluginServiceLoaderPath.toFile().exists()) {
             LOG.info("Plugin Service Loader directory: {}", localPluginServiceLoaderPath.toAbsolutePath());
             return localPluginServiceLoaderPath;
         }
-        
-        // For installed applications on macOS
+    
+        // For installed applications on macOS (fallback)
         Path installedMacPath = Path.of("/").resolve("Applications").resolve("Orchestrator.app")
                 .resolve("Contents").resolve(PLUGIN_SERVICE_LOADER_DIRECTORY);
         if (installedMacPath.toFile().exists()) {
             LOG.info("Plugin Service Loader directory: {}", installedMacPath.toAbsolutePath());
             return installedMacPath;
         }
-        
-        // If nothing found, log the paths we tried and return the jlink image path as default
+    
+        // If nothing found, log the paths we tried
         LOG.warn("Plugin service loader not found at any expected location. Tried:");
-        LOG.warn("  - Jlink image: {}", jlinkImagePath.toAbsolutePath());
+        if (jpackageAppPath != null) {
+            LOG.warn("  - jpackage: <Contents>/runtime/Contents/Home/{}", PLUGIN_SERVICE_LOADER_DIRECTORY);
+        }
+        if (parent != null) {
+            LOG.warn("  - Jlink image: {}", parent.resolve(PLUGIN_SERVICE_LOADER_DIRECTORY).toAbsolutePath());
+        }
         LOG.warn("  - Local build: {}", localPluginServiceLoaderPath.toAbsolutePath());
         LOG.warn("  - Installed app: {}", installedMacPath.toAbsolutePath());
-        LOG.info("Plugin Service Loader directory: {}", jlinkImagePath.toAbsolutePath());
-        return jlinkImagePath;
+        
+        // Return a reasonable default (will fail later if doesn't exist)
+        Path defaultPath = parent != null ? parent.resolve(PLUGIN_SERVICE_LOADER_DIRECTORY) : 
+                          userDir.resolve(PLUGIN_SERVICE_LOADER_DIRECTORY);
+        LOG.warn("Using default path: {}", defaultPath.toAbsolutePath());
+        return defaultPath;
     }
 
     /**
