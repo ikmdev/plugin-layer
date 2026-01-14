@@ -11,7 +11,7 @@
 
     <groupId>dev.ikm</groupId>
     <artifactId>plugin-layer</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1-SNAPSHOT</version>
 
     <name>IKM Plugin Layer</name>
 
