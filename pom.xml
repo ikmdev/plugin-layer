@@ -16,7 +16,7 @@
     <name>IKM Plugin Layer</name>
 
     <properties>
-        <tinkar.version>1.127.0</tinkar.version>
+        <tinkar.version>1.127.1</tinkar.version>
     </properties>
 
     <dependencyManagement>
